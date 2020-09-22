@@ -187,9 +187,19 @@ module Audited
         combine_target.audited_changes = audits_to_combine.pluck(:audited_changes).reduce(&:merge)
         combine_target.comment = "#{combine_target.comment}\nThis audit is the result of multiple audits being combined."
 
-        transaction do
-          combine_target.save!
-          audits_to_combine.unscope(:limit).where("version < ?", combine_target.version).delete_all
+        begin
+          deadlock_retries ||= 0
+          transaction do
+            combine_target.save!
+            audits_to_combine.unscope(:limit).where("version < ?", combine_target.version).delete_all
+          end
+        rescue ActiveRecord::Deadlocked
+          if (deadlock_retries += 1) < 3
+            milliseconds = rand(6) / 1000.0
+            wait(milliseconds)
+            retry
+          end
+          raise
         end
       end
 
